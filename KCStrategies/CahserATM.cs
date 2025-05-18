@@ -28,7 +28,7 @@ using NinjaTrader.NinjaScript.Strategies;
 
 namespace NinjaTrader.NinjaScript.Strategies.KCStrategies
 {
-    public class CasherATM : ATMAlgoBase
+    public class CasherATM : ATMAlgoBase2
     {
         // Parameters
 		private Momentum Momentum1;
@@ -50,27 +50,16 @@ namespace NinjaTrader.NinjaScript.Strategies.KCStrategies
             if (State == State.SetDefaults)
             {
                 Description = "This strategy is based on the HiLoBands indicator.";
-                Name = "Casher v6.0.0";
-                StrategyName = "Casher";
-                Version = "6.0.0 May 2025";
+                Name = "Casher ATM v5.4.4";
+                StrategyName = "Cahser ATM";
+                Version = "5.4.4 May 2025";
                 Credits = "Strategy by Khanh Nguyen";
-                ChartType =  "Tbars 25, 50";				
+                ChartType =  "Tbars 20, 25, 50";				
 				
-				LookbackPeriod		= 4;
+				LookbackPeriod		= 6;
+				SmoothingPeriod		= 6;
 				Width				= 2;
-				showHighLow			= true;				
-				
-		        enableHmaHooks 		= false;
-		        showHmaHooks 		= false;
-				
-		        enableVMA 			= false;
-		        showVMA 			= false;
-
-		        enableRegChan1 		= false;
-		        enableRegChan2 		= false;
-		        showRegChan1 		= false;
-		        showRegChan2 		= false;
-		        showRegChanHiLo 	= false;
+				showHighLow			= true;	
             }
             else if (State == State.DataLoaded)
             {
@@ -193,7 +182,7 @@ namespace NinjaTrader.NinjaScript.Strategies.KCStrategies
         #region Indicators
         protected override void InitializeIndicators()
         {
-			HiLoBands1				= HiLoBands(LookbackPeriod, Width);
+			HiLoBands1				= HiLoBands(LookbackPeriod, SmoothingPeriod, Width);
 			HiLoBands1.Plots[0].Brush = Brushes.Cyan;
 			HiLoBands1.Plots[1].Brush = Brushes.Magenta;
 			if (showHighLow) AddChartIndicator(HiLoBands1);
@@ -208,31 +197,26 @@ namespace NinjaTrader.NinjaScript.Strategies.KCStrategies
 
         #region Properties
 
-//		[NinjaScriptProperty]
-//        [Display(Name = "Risk to Reward Ratio", Order = 1, GroupName="02. Order Settings")]
-//        public double RiskToReward { get; set; }		
-		
 		[NinjaScriptProperty]
         [Display(Name = "HiLo Period", Order = 1, GroupName="08a. Strategy Settings")]
         public int LookbackPeriod { get; set; }		
 		
+        [Range(1, int.MaxValue), NinjaScriptProperty]
+        [Display(Name = "Smoothing Period", Description = "Period for HMA smoothing of bands", Order = 2, GroupName = "08a. Strategy Settings")]
+        public int SmoothingPeriod { get; set; }
+
 		[NinjaScriptProperty]
-        [Display(Name = "Line Width", Order = 2, GroupName="08a. Strategy Settings")]
+        [Display(Name = "Line Width", Order = 3, GroupName="08a. Strategy Settings")]
         public int Width { get; set; }	
 		
 		[NinjaScriptProperty]
-        [Display(Name = "Show High Low Bands", Order = 3, GroupName = "08a. Strategy Settings")]
+        [Display(Name = "Show High Low Bands", Order = 4, GroupName = "08a. Strategy Settings")]
         public bool showHighLow { get; set; }
 		
 		[NinjaScriptProperty]
-        [Display(Name = "Show Momentum", Order = 4, GroupName = "08a. Strategy Settings")]
+        [Display(Name = "Show Momentum", Order = 5, GroupName = "08a. Strategy Settings")]
         public bool showMomo { get; set; }
 		
-//		[NinjaScriptProperty]
-//		[Display(Name="Trail Stop Tick Offset", Order = 5, GroupName="08a. Strategy Settings")]
-//		public int TrailOffset
-//		{ get; set; }
-
         #endregion
     }
 }
