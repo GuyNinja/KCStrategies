@@ -1,0 +1,366 @@
+#region Using declarations
+using System;
+using System.Collections.Generic;
+using System.ComponentModel;
+using System.ComponentModel.DataAnnotations;
+using System.Windows.Media;
+using System.Xml.Serialization;
+using NinjaTrader.Cbi;
+using NinjaTrader.Gui.Chart;
+using NinjaTrader.Data;
+using NinjaTrader.NinjaScript;
+using NinjaTrader.NinjaScript.DrawingTools;
+using NinjaTrader.Gui.Tools;
+#endregion
+
+namespace NinjaTrader.NinjaScript.Indicators
+{
+	public class MarketOpsSuite_Modular_v2 : Indicator
+	{
+		#region Variables
+		// Overnight Levels Module
+		private double todaysONH, todaysONL, todaysONM;
+		private int lastDayCalculated;
+		
+		// Daily SMA Module
+		private List<double> dailyCloses = new List<double>();
+		private double currentDailySmaValue;
+		
+		// Volume Analysis Module
+		private double avgVolume;
+		#endregion
+
+		protected override void OnStateChange()
+		{
+			if (State == State.SetDefaults)
+			{
+				Description = @"Modular MarketOps Suite v2 - Easy to extend and maintain";
+				Name = @"MarketOpsSuite_Modular_v2";
+				Calculate = Calculate.OnBarClose;
+				IsOverlay = true;
+				DrawOnPricePanel = true;
+				IsSuspendedWhileInactive = true;
+
+				// Module 1: Overnight Levels
+				EnableOvernightLevels = true;
+				ShowMidpoint = true;
+				OvernightStart = 1800;
+				OvernightEnd = 0930;
+				OvernightLineWidth = 2;
+				OvernightColor = Brushes.DodgerBlue;
+				MidpointColor = Brushes.CornflowerBlue;
+				
+				// Module 2: Daily SMA
+				EnableDailySma = true;
+				SmaPeriod = 20;
+				SmaLineWidth = 2;
+				SmaColor = Brushes.Gold;
+				
+				// Module 3: Volume Analysis
+				EnableVolumeAnalysis = true;
+				VolumeLookback = 3;
+				VolumeSpikeThreshold = 150;
+				VolumeSpikeColor = Brushes.White;
+			}
+			else if (State == State.DataLoaded)
+			{
+				// Initialize Series
+				OvernightHigh = new Series<double>(this, MaximumBarsLookBack.Infinite);
+				OvernightLow = new Series<double>(this, MaximumBarsLookBack.Infinite);
+				DailySmaValue = new Series<double>(this, MaximumBarsLookBack.Infinite);
+				VolumeSpikePercent = new Series<double>(this, MaximumBarsLookBack.Infinite);
+				
+				// Initialize daily closes list
+				for (int i = CurrentBar - 1; i > 0; i--)
+				{
+					if (ToDay(Time[i]) != ToDay(Time[i + 1]))
+						dailyCloses.Insert(0, Close[i + 1]);
+				}
+			}
+		}
+
+		protected override void OnBarUpdate()
+		{
+			if (CurrentBar < 200) return;
+
+			// Module 1: Overnight Levels
+			if (EnableOvernightLevels)
+				ProcessOvernightLevels();
+
+			// Module 2: Daily SMA
+			if (EnableDailySma)
+				ProcessDailySma();
+
+			// Module 3: Volume Analysis
+			if (EnableVolumeAnalysis)
+				ProcessVolumeAnalysis();
+		}
+
+		#region Module 1: Overnight Levels
+		private void ProcessOvernightLevels()
+		{
+			// Calculate Overnight Levels
+			if (ToTime(Time[0]) >= OvernightEnd && lastDayCalculated != ToDay(Time[0]))
+			{
+				todaysONH = 0;
+				todaysONL = 0;
+
+				DateTime sessionEndTime = Time[0].Date.AddHours(OvernightEnd / 100).AddMinutes(OvernightEnd % 100);
+				DateTime sessionStartTime = sessionEndTime.AddDays(-1).Date.AddHours(OvernightStart / 100).AddMinutes(OvernightStart % 100);
+
+				for (int i = 0; i < 200; i++)
+				{
+					if (CurrentBar - i < 0) break;
+					DateTime barTime = Time[i];
+					if (barTime >= sessionStartTime && barTime < sessionEndTime)
+					{
+						if (todaysONH == 0 || High[i] > todaysONH) todaysONH = High[i];
+						if (todaysONL == 0 || Low[i] < todaysONL) todaysONL = Low[i];
+					}
+					if (barTime < sessionStartTime) break;
+				}
+
+				lastDayCalculated = ToDay(Time[0]);
+				todaysONM = (todaysONH + todaysONL) / 2;
+			}
+
+			// Draw Overnight Levels
+			if (lastDayCalculated > 0)
+			{
+				OvernightHigh[0] = todaysONH;
+				OvernightLow[0] = todaysONL;
+
+				if (ToDay(Time[0]) >= lastDayCalculated)
+				{
+					DrawOvernightLevels();
+				}
+			}
+		}
+
+		private void DrawOvernightLevels()
+		{
+			Draw.HorizontalLine(this, "ONH_" + lastDayCalculated, todaysONH, OvernightColor, DashStyleHelper.Solid, OvernightLineWidth);
+			Draw.HorizontalLine(this, "ONL_" + lastDayCalculated, todaysONL, OvernightColor, DashStyleHelper.Solid, OvernightLineWidth);
+			
+			if (ShowMidpoint)
+				Draw.HorizontalLine(this, "ONM_" + lastDayCalculated, todaysONM, MidpointColor, DashStyleHelper.Dot, OvernightLineWidth);
+		}
+		#endregion
+
+		#region Module 2: Daily SMA
+		private void ProcessDailySma()
+		{
+			// Update daily closes
+			if (Bars.IsFirstBarOfSession)
+			{
+				if (CurrentBar > 1) dailyCloses.Add(Close[1]);
+				if (dailyCloses.Count > SmaPeriod + 5) dailyCloses.RemoveAt(0);
+			}
+
+			// Calculate Daily SMA
+			if (dailyCloses.Count >= SmaPeriod)
+			{
+				double sum = 0;
+				for (int i = dailyCloses.Count - SmaPeriod; i < dailyCloses.Count; i++)
+					sum += dailyCloses[i];
+				currentDailySmaValue = sum / SmaPeriod;
+			}
+			DailySmaValue[0] = currentDailySmaValue;
+
+			// Draw Daily SMA
+			if (DailySmaValue[0] > 0)
+				Draw.HorizontalLine(this, "DailySMA", DailySmaValue[0], SmaColor, DashStyleHelper.Dash, SmaLineWidth);
+			else
+				RemoveDrawObject("DailySMA");
+		}
+		#endregion
+
+		#region Module 3: Volume Analysis
+		private void ProcessVolumeAnalysis()
+		{
+			if (CurrentBar > VolumeLookback)
+			{
+				// Calculate average volume
+				avgVolume = 0;
+				for (int i = 1; i <= VolumeLookback; i++)
+					avgVolume += Volume[i];
+				avgVolume /= VolumeLookback;
+
+				double currentVolume = Volume[0];
+				double percentIncrease = 0;
+				if (avgVolume > 0)
+					percentIncrease = ((currentVolume / avgVolume) - 1) * 100;
+
+				VolumeSpikePercent[0] = percentIncrease;
+
+				// Draw volume spike
+				if (percentIncrease >= VolumeSpikeThreshold)
+				{
+					Draw.Dot(this, "VolSpike_" + CurrentBar, false, 0, Low[0] - 2 * TickSize, VolumeSpikeColor);
+				}
+			}
+			else
+			{
+				VolumeSpikePercent[0] = 0;
+			}
+		}
+		#endregion
+
+		#region Properties
+		[Browsable(false)]
+		[XmlIgnore]
+		public Series<double> OvernightHigh { get; private set; }
+
+		[Browsable(false)]
+		[XmlIgnore]
+		public Series<double> OvernightLow { get; private set; }
+
+		[Browsable(false)]
+		[XmlIgnore]
+		public Series<double> DailySmaValue { get; private set; }
+
+		[Browsable(false)]
+		[XmlIgnore]
+		public Series<double> VolumeSpikePercent { get; private set; }
+
+		// Module 1: Overnight Levels
+		[NinjaScriptProperty]
+		[Display(Name = "Enable Overnight Levels", Order = 1, GroupName = "1. Overnight Levels")]
+		public bool EnableOvernightLevels { get; set; }
+
+		[NinjaScriptProperty]
+		[Display(Name = "Show Midpoint", Order = 2, GroupName = "1. Overnight Levels")]
+		public bool ShowMidpoint { get; set; }
+
+		[NinjaScriptProperty]
+		[Range(0, 2359)]
+		[Display(Name = "Overnight Start (HHmm)", Order = 3, GroupName = "1. Overnight Levels")]
+		public int OvernightStart { get; set; }
+
+		[NinjaScriptProperty]
+		[Range(0, 2359)]
+		[Display(Name = "Overnight End (HHmm)", Order = 4, GroupName = "1. Overnight Levels")]
+		public int OvernightEnd { get; set; }
+
+		[NinjaScriptProperty]
+		[Range(1, 10)]
+		[Display(Name = "Line Width", Order = 5, GroupName = "1. Overnight Levels")]
+		public int OvernightLineWidth { get; set; }
+
+		[XmlIgnore]
+		[Display(Name = "Overnight Color", Order = 6, GroupName = "1. Overnight Levels")]
+		public Brush OvernightColor { get; set; }
+
+		[Browsable(false)]
+		public string OvernightColorSerializable { get { return Serialize.BrushToString(OvernightColor); } set { OvernightColor = Serialize.StringToBrush(value); } }
+
+		[XmlIgnore]
+		[Display(Name = "Midpoint Color", Order = 7, GroupName = "1. Overnight Levels")]
+		public Brush MidpointColor { get; set; }
+
+		[Browsable(false)]
+		public string MidpointColorSerializable { get { return Serialize.BrushToString(MidpointColor); } set { MidpointColor = Serialize.StringToBrush(value); } }
+
+		// Module 2: Daily SMA
+		[NinjaScriptProperty]
+		[Display(Name = "Enable Daily SMA", Order = 8, GroupName = "2. Daily SMA")]
+		public bool EnableDailySma { get; set; }
+
+		[NinjaScriptProperty]
+		[Range(1, 100)]
+		[Display(Name = "SMA Period", Order = 9, GroupName = "2. Daily SMA")]
+		public int SmaPeriod { get; set; }
+
+		[NinjaScriptProperty]
+		[Range(1, 10)]
+		[Display(Name = "SMA Line Width", Order = 10, GroupName = "2. Daily SMA")]
+		public int SmaLineWidth { get; set; }
+
+		[XmlIgnore]
+		[Display(Name = "SMA Color", Order = 11, GroupName = "2. Daily SMA")]
+		public Brush SmaColor { get; set; }
+
+		[Browsable(false)]
+		public string SmaColorSerializable { get { return Serialize.BrushToString(SmaColor); } set { SmaColor = Serialize.StringToBrush(value); } }
+
+		// Module 3: Volume Analysis
+		[NinjaScriptProperty]
+		[Display(Name = "Enable Volume Analysis", Order = 12, GroupName = "3. Volume Analysis")]
+		public bool EnableVolumeAnalysis { get; set; }
+
+		[NinjaScriptProperty]
+		[Range(1, 50)]
+		[Display(Name = "Volume Lookback", Order = 13, GroupName = "3. Volume Analysis")]
+		public int VolumeLookback { get; set; }
+
+		[NinjaScriptProperty]
+		[Range(50, 1000)]
+		[Display(Name = "Volume Spike Threshold %", Order = 14, GroupName = "3. Volume Analysis")]
+		public double VolumeSpikeThreshold { get; set; }
+
+		[XmlIgnore]
+		[Display(Name = "Volume Spike Color", Order = 15, GroupName = "3. Volume Analysis")]
+		public Brush VolumeSpikeColor { get; set; }
+
+		[Browsable(false)]
+		public string VolumeSpikeColorSerializable { get { return Serialize.BrushToString(VolumeSpikeColor); } set { VolumeSpikeColor = Serialize.StringToBrush(value); } }
+		#endregion
+	}
+}
+
+#region NinjaScript generated code. Neither change nor remove.
+
+namespace NinjaTrader.NinjaScript.Indicators
+{
+	public partial class Indicator : NinjaTrader.Gui.NinjaScript.IndicatorRenderBase
+	{
+		private MarketOpsSuite_Modular_v2[] cacheMarketOpsSuite_Modular_v2;
+		public MarketOpsSuite_Modular_v2 MarketOpsSuite_Modular_v2(bool enableOvernightLevels, bool showMidpoint, int overnightStart, int overnightEnd, int overnightLineWidth, bool enableDailySma, int smaPeriod, int smaLineWidth, bool enableVolumeAnalysis, int volumeLookback, double volumeSpikeThreshold)
+		{
+			return MarketOpsSuite_Modular_v2(Input, enableOvernightLevels, showMidpoint, overnightStart, overnightEnd, overnightLineWidth, enableDailySma, smaPeriod, smaLineWidth, enableVolumeAnalysis, volumeLookback, volumeSpikeThreshold);
+		}
+
+		public MarketOpsSuite_Modular_v2 MarketOpsSuite_Modular_v2(ISeries<double> input, bool enableOvernightLevels, bool showMidpoint, int overnightStart, int overnightEnd, int overnightLineWidth, bool enableDailySma, int smaPeriod, int smaLineWidth, bool enableVolumeAnalysis, int volumeLookback, double volumeSpikeThreshold)
+		{
+			if (cacheMarketOpsSuite_Modular_v2 != null)
+				for (int idx = 0; idx < cacheMarketOpsSuite_Modular_v2.Length; idx++)
+					if (cacheMarketOpsSuite_Modular_v2[idx] != null && cacheMarketOpsSuite_Modular_v2[idx].EnableOvernightLevels == enableOvernightLevels && cacheMarketOpsSuite_Modular_v2[idx].ShowMidpoint == showMidpoint && cacheMarketOpsSuite_Modular_v2[idx].OvernightStart == overnightStart && cacheMarketOpsSuite_Modular_v2[idx].OvernightEnd == overnightEnd && cacheMarketOpsSuite_Modular_v2[idx].OvernightLineWidth == overnightLineWidth && cacheMarketOpsSuite_Modular_v2[idx].EnableDailySma == enableDailySma && cacheMarketOpsSuite_Modular_v2[idx].SmaPeriod == smaPeriod && cacheMarketOpsSuite_Modular_v2[idx].SmaLineWidth == smaLineWidth && cacheMarketOpsSuite_Modular_v2[idx].EnableVolumeAnalysis == enableVolumeAnalysis && cacheMarketOpsSuite_Modular_v2[idx].VolumeLookback == volumeLookback && cacheMarketOpsSuite_Modular_v2[idx].VolumeSpikeThreshold == volumeSpikeThreshold && cacheMarketOpsSuite_Modular_v2[idx].EqualsInput(input))
+						return cacheMarketOpsSuite_Modular_v2[idx];
+			return CacheIndicator<MarketOpsSuite_Modular_v2>(new MarketOpsSuite_Modular_v2(){ EnableOvernightLevels = enableOvernightLevels, ShowMidpoint = showMidpoint, OvernightStart = overnightStart, OvernightEnd = overnightEnd, OvernightLineWidth = overnightLineWidth, EnableDailySma = enableDailySma, SmaPeriod = smaPeriod, SmaLineWidth = smaLineWidth, EnableVolumeAnalysis = enableVolumeAnalysis, VolumeLookback = volumeLookback, VolumeSpikeThreshold = volumeSpikeThreshold }, input, ref cacheMarketOpsSuite_Modular_v2);
+		}
+	}
+}
+
+namespace NinjaTrader.NinjaScript.MarketAnalyzerColumns
+{
+	public partial class MarketAnalyzerColumn : MarketAnalyzerColumnBase
+	{
+		public Indicators.MarketOpsSuite_Modular_v2 MarketOpsSuite_Modular_v2(bool enableOvernightLevels, bool showMidpoint, int overnightStart, int overnightEnd, int overnightLineWidth, bool enableDailySma, int smaPeriod, int smaLineWidth, bool enableVolumeAnalysis, int volumeLookback, double volumeSpikeThreshold)
+		{
+			return indicator.MarketOpsSuite_Modular_v2(Input, enableOvernightLevels, showMidpoint, overnightStart, overnightEnd, overnightLineWidth, enableDailySma, smaPeriod, smaLineWidth, enableVolumeAnalysis, volumeLookback, volumeSpikeThreshold);
+		}
+
+		public Indicators.MarketOpsSuite_Modular_v2 MarketOpsSuite_Modular_v2(ISeries<double> input , bool enableOvernightLevels, bool showMidpoint, int overnightStart, int overnightEnd, int overnightLineWidth, bool enableDailySma, int smaPeriod, int smaLineWidth, bool enableVolumeAnalysis, int volumeLookback, double volumeSpikeThreshold)
+		{
+			return indicator.MarketOpsSuite_Modular_v2(input, enableOvernightLevels, showMidpoint, overnightStart, overnightEnd, overnightLineWidth, enableDailySma, smaPeriod, smaLineWidth, enableVolumeAnalysis, volumeLookback, volumeSpikeThreshold);
+		}
+	}
+}
+
+namespace NinjaTrader.NinjaScript.Strategies
+{
+	public partial class Strategy : NinjaTrader.Gui.NinjaScript.StrategyRenderBase
+	{
+		public Indicators.MarketOpsSuite_Modular_v2 MarketOpsSuite_Modular_v2(bool enableOvernightLevels, bool showMidpoint, int overnightStart, int overnightEnd, int overnightLineWidth, bool enableDailySma, int smaPeriod, int smaLineWidth, bool enableVolumeAnalysis, int volumeLookback, double volumeSpikeThreshold)
+		{
+			return indicator.MarketOpsSuite_Modular_v2(Input, enableOvernightLevels, showMidpoint, overnightStart, overnightEnd, overnightLineWidth, enableDailySma, smaPeriod, smaLineWidth, enableVolumeAnalysis, volumeLookback, volumeSpikeThreshold);
+		}
+
+		public Indicators.MarketOpsSuite_Modular_v2 MarketOpsSuite_Modular_v2(ISeries<double> input , bool enableOvernightLevels, bool showMidpoint, int overnightStart, int overnightEnd, int overnightLineWidth, bool enableDailySma, int smaPeriod, int smaLineWidth, bool enableVolumeAnalysis, int volumeLookback, double volumeSpikeThreshold)
+		{
+			return indicator.MarketOpsSuite_Modular_v2(input, enableOvernightLevels, showMidpoint, overnightStart, overnightEnd, overnightLineWidth, enableDailySma, smaPeriod, smaLineWidth, enableVolumeAnalysis, volumeLookback, volumeSpikeThreshold);
+		}
+	}
+}
+
+#endregion
